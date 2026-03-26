@@ -17,11 +17,11 @@ import (
 const maxDebitRetries = 3
 
 type Service struct {
-	db       *pgxpool.Pool
-	bits     *Repository
-	wallets  *wallet.Repository
-	txs      *transaction.Repository
-	producer *event.Producer
+	db      *pgxpool.Pool
+	bits    *Repository
+	wallets *wallet.Repository
+	txs     *transaction.Repository
+	outbox  *event.OutboxRepository
 }
 
 func NewService(
@@ -29,18 +29,15 @@ func NewService(
 	bits *Repository,
 	wallets *wallet.Repository,
 	txs *transaction.Repository,
-	producer *event.Producer,
+	outbox *event.OutboxRepository,
 ) *Service {
-	return &Service{db: db, bits: bits, wallets: wallets, txs: txs, producer: producer}
+	return &Service{db: db, bits: bits, wallets: wallets, txs: txs, outbox: outbox}
 }
 
 // Purchase buys bits using fiat wallet balance.
-// Uses optimistic-lock retry on the wallet debit.
-// Atomically: debit wallet + credit bits + insert transaction.
-// Then publishes bits.purchased event (best-effort).
+// All side-effects (wallet debit, bits credit, ledger entry, outbox event)
+// happen in a single DB transaction — nothing is lost if the process crashes.
 func (s *Service) Purchase(ctx context.Context, userID string, bitsAmount int64, paidCents int64, idempotencyKey string) error {
-	var txID string
-
 	for attempt := 0; attempt < maxDebitRetries; attempt++ {
 		w, err := s.wallets.GetByUserID(ctx, userID)
 		if err != nil {
@@ -68,38 +65,28 @@ func (s *Service) Purchase(ctx context.Context, userID string, bitsAmount int64,
 			if err := s.txs.Create(ctx, tx, t); err != nil {
 				return err
 			}
-			txID = t.ID
-			return nil
+			return s.outbox.Enqueue(ctx, tx, event.TopicBitsPurchased, userID, event.BitsPurchasedEvent{
+				UserID:    userID,
+				Bits:      bitsAmount,
+				PaidCents: paidCents,
+				TxID:      t.ID,
+				OccuredAt: time.Now(),
+			})
 		})
 
 		if err == nil {
-			break
+			return nil
 		}
 		if err != wallet.ErrVersionConflict {
 			return err
 		}
 	}
-	if txID == "" {
-		return ErrMaxRetriesExceeded
-	}
-
-	// Publish event after commit — best-effort (outbox pattern in Phase 7 for reliability)
-	_ = s.producer.Publish(ctx, event.TopicBitsPurchased, userID, event.BitsPurchasedEvent{
-		UserID:    userID,
-		Bits:      bitsAmount,
-		PaidCents: paidCents,
-		TxID:      txID,
-		OccuredAt: time.Now(),
-	})
-	return nil
+	return ErrMaxRetriesExceeded
 }
 
-// Cheer spends bits on a streamer using an optimistic-lock retry loop.
-// Atomically: debit bits + insert transaction.
-// Then publishes bits.cheered event for async revenue aggregation.
+// Cheer spends bits on a streamer.
+// Outbox event drives async revenue aggregation — safe even if Kafka is down.
 func (s *Service) Cheer(ctx context.Context, userID, streamerID string, bitsAmount int64, idempotencyKey string) error {
-	var txID string
-
 	for attempt := 0; attempt < maxDebitRetries; attempt++ {
 		b, err := s.bits.GetByUserID(ctx, userID)
 		if err != nil {
@@ -125,30 +112,23 @@ func (s *Service) Cheer(ctx context.Context, userID, streamerID string, bitsAmou
 			if err := s.txs.Create(ctx, tx, t); err != nil {
 				return err
 			}
-			txID = t.ID
-			return nil
+			return s.outbox.Enqueue(ctx, tx, event.TopicBitsCheered, streamerID, event.BitsCheeredEvent{
+				UserID:     userID,
+				StreamerID: streamerID,
+				Bits:       bitsAmount,
+				TxID:       t.ID,
+				OccuredAt:  time.Now(),
+			})
 		})
 
 		if err == nil {
-			break
+			return nil
 		}
 		if err != ErrVersionConflict {
 			return err
 		}
 	}
-	if txID == "" {
-		return ErrMaxRetriesExceeded
-	}
-
-	// Publish event — revenue aggregator (Phase 5) will update streamer_revenue_summary
-	_ = s.producer.Publish(ctx, event.TopicBitsCheered, streamerID, event.BitsCheeredEvent{
-		UserID:     userID,
-		StreamerID: streamerID,
-		Bits:       bitsAmount,
-		TxID:       txID,
-		OccuredAt:  time.Now(),
-	})
-	return nil
+	return ErrMaxRetriesExceeded
 }
 
 // GetBalance returns the bits balance for a user.

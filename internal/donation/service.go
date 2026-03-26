@@ -16,27 +16,24 @@ import (
 const maxDebitRetries = 3
 
 type Service struct {
-	db       *pgxpool.Pool
-	wallets  *wallet.Repository
-	txs      *transaction.Repository
-	producer *event.Producer
+	db      *pgxpool.Pool
+	wallets *wallet.Repository
+	txs     *transaction.Repository
+	outbox  *event.OutboxRepository
 }
 
 func NewService(
 	db *pgxpool.Pool,
 	wallets *wallet.Repository,
 	txs *transaction.Repository,
-	producer *event.Producer,
+	outbox *event.OutboxRepository,
 ) *Service {
-	return &Service{db: db, wallets: wallets, txs: txs, producer: producer}
+	return &Service{db: db, wallets: wallets, txs: txs, outbox: outbox}
 }
 
 // Donate sends a fiat donation from a user to a streamer.
-// Atomically: debit wallet + insert transaction.
-// Then publishes donation.received for async revenue aggregation.
+// All side-effects happen in one DB transaction via the outbox pattern.
 func (s *Service) Donate(ctx context.Context, fromUserID, streamerID string, amountCents int64, message, idempotencyKey string) error {
-	var txID string
-
 	for attempt := 0; attempt < maxDebitRetries; attempt++ {
 		w, err := s.wallets.GetByUserID(ctx, fromUserID)
 		if err != nil {
@@ -62,28 +59,22 @@ func (s *Service) Donate(ctx context.Context, fromUserID, streamerID string, amo
 			if err := s.txs.Create(ctx, tx, t); err != nil {
 				return err
 			}
-			txID = t.ID
-			return nil
+			return s.outbox.Enqueue(ctx, tx, event.TopicDonationReceived, streamerID, event.DonationReceivedEvent{
+				FromUserID:  fromUserID,
+				StreamerID:  streamerID,
+				AmountCents: amountCents,
+				Message:     message,
+				TxID:        t.ID,
+				OccuredAt:   time.Now(),
+			})
 		})
 
 		if err == nil {
-			break
+			return nil
 		}
 		if err != wallet.ErrVersionConflict {
 			return err
 		}
 	}
-	if txID == "" {
-		return wallet.ErrMaxRetriesExceeded
-	}
-
-	_ = s.producer.Publish(ctx, event.TopicDonationReceived, streamerID, event.DonationReceivedEvent{
-		FromUserID:  fromUserID,
-		StreamerID:  streamerID,
-		AmountCents: amountCents,
-		Message:     message,
-		TxID:        txID,
-		OccuredAt:   time.Now(),
-	})
-	return nil
+	return wallet.ErrMaxRetriesExceeded
 }

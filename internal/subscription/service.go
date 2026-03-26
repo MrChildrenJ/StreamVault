@@ -18,11 +18,11 @@ import (
 const maxDebitRetries = 3
 
 type Service struct {
-	db       *pgxpool.Pool
-	subs     *Repository
-	wallets  *wallet.Repository
-	txs      *transaction.Repository
-	producer *event.Producer
+	db      *pgxpool.Pool
+	subs    *Repository
+	wallets *wallet.Repository
+	txs     *transaction.Repository
+	outbox  *event.OutboxRepository
 }
 
 func NewService(
@@ -30,9 +30,9 @@ func NewService(
 	subs *Repository,
 	wallets *wallet.Repository,
 	txs *transaction.Repository,
-	producer *event.Producer,
+	outbox *event.OutboxRepository,
 ) *Service {
-	return &Service{db: db, subs: subs, wallets: wallets, txs: txs, producer: producer}
+	return &Service{db: db, subs: subs, wallets: wallets, txs: txs, outbox: outbox}
 }
 
 // Subscribe creates a self-subscription for subscriberID to a streamer's tier.
@@ -99,7 +99,19 @@ func (s *Service) createSubscription(ctx context.Context, subscriberID, tierID s
 			}
 			sub.TransactionID = t.ID
 
-			return s.subs.Create(ctx, tx, sub)
+			if err := s.subs.Create(ctx, tx, sub); err != nil {
+				return err
+			}
+			return s.outbox.Enqueue(ctx, tx, event.TopicSubscriptionCreated, tier.StreamerID, event.SubscriptionCreatedEvent{
+				SubscriptionID: sub.ID,
+				SubscriberID:   subscriberID,
+				StreamerID:     tier.StreamerID,
+				TierID:         tierID,
+				AmountCents:    tier.Price,
+				GiftedBy:       gifterID,
+				TxID:           sub.TransactionID,
+				OccuredAt:      time.Now(),
+			})
 		})
 
 		if err == nil {
@@ -112,17 +124,6 @@ func (s *Service) createSubscription(ctx context.Context, subscriberID, tierID s
 	if sub == nil || sub.ID == "" {
 		return nil, wallet.ErrMaxRetriesExceeded
 	}
-
-	_ = s.producer.Publish(ctx, event.TopicSubscriptionCreated, tier.StreamerID, event.SubscriptionCreatedEvent{
-		SubscriptionID: sub.ID,
-		SubscriberID:   subscriberID,
-		StreamerID:     tier.StreamerID,
-		TierID:         tierID,
-		AmountCents:    tier.Price,
-		GiftedBy:       gifterID,
-		TxID:           sub.TransactionID,
-		OccuredAt:      time.Now(),
-	})
 	return sub, nil
 }
 

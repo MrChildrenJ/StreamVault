@@ -1,0 +1,38 @@
+# Environment — contains secrets, never commit
+.env
+
+# Build output
+/streamvault
+/server
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.html
+coverage.out
+
+# Internal docs (not for public repo)
+PLAN.md
+IMPLEMENTATION.md
+
+# Memory system (Claude Code internal)
+memory/
+
+# Go workspace files
+go.work
+go.work.sum
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Dependency vendor directory (we use module cache instead)
+vendor/

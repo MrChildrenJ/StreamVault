@@ -96,7 +96,7 @@ Repository Layer                 (revenue aggregation,
 - [x] `GET /api/v1/streamers/:id/revenue` — reads pre-aggregated summary
 - [x] `GET /api/v1/streamers/:id/transactions?limit=&before=` — cursor-based paginated ledger
 
-### Phase 6 — HTTP API Surface
+### Phase 6 — HTTP API Surface ✅
 
 | Method | Path | Description |
 |---|---|---|
@@ -111,11 +111,11 @@ Repository Layer                 (revenue aggregation,
 | GET | `/users/:id/wallet` | Wallet balance |
 | GET | `/users/:id/bits` | Bits balance |
 
-### Phase 7 — Hardening
-- [ ] Idempotency middleware: cache `idempotency_key` responses (Redis or Postgres)
-- [ ] Distributed lock consideration for high-concurrency debit (optimistic lock + retry is baseline; add advisory lock if contention is high)
-- [ ] Payout flow: `streamer_revenue_summary` → `transactions (type=payout)` → mark pending until external payment processor confirms
-- [ ] Circuit breaker on Kafka publish (don't fail the write path if Kafka is down — use outbox pattern)
+### Phase 7 — Hardening ✅
+- [x] Outbox pattern: events written to `event_outbox` inside the business DB tx — never lost if Kafka is down
+- [x] `OutboxRelay`: polls every 2s, `FOR UPDATE SKIP LOCKED` (safe for multiple instances), publishes then marks `published_at`
+- [x] Payout flow: `POST /payouts` → decrement `streamer_revenue_summary` + insert `pending` payout tx atomically
+- [ ] Idempotency middleware (HTTP-level response caching) — future work
 
 ---
 

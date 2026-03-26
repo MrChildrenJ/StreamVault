@@ -75,13 +75,19 @@ func (p *Producer) Close() error {
 	return p.writer.Close()
 }
 
-// Publish sends an event to the given topic.
-// The userID is used as the message key to preserve per-user ordering.
+// Publish serialises payload and sends it to Kafka.
+// Prefer the outbox pattern (OutboxRepository.Enqueue) for transactional safety.
+// Use Publish only for non-critical, fire-and-forget scenarios.
 func (p *Producer) Publish(ctx context.Context, topic, key string, payload any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("event marshal: %w", err)
 	}
+	return p.publishRaw(ctx, topic, key, body)
+}
+
+// publishRaw sends a pre-serialised message; used internally by OutboxRelay.
+func (p *Producer) publishRaw(ctx context.Context, topic, key string, body []byte) error {
 	return p.writer.WriteMessages(ctx, kafka.Message{
 		Topic: topic,
 		Key:   []byte(key),
