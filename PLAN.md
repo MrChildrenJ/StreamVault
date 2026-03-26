@@ -91,11 +91,10 @@ Repository Layer                 (revenue aggregation,
 - [x] Background expiry worker (`StartExpiryWorker`) — tickers every 5 min, updates expired subs
 - [x] `transaction.Create` upgraded to `RETURNING id` so callers get the generated ID
 
-### Phase 5 — Revenue Dashboard
-- [ ] Kafka consumer: `revenue-aggregator` service
-  - On each `subscription.created` / `donation.received` / `bits.cheered` → update `streamer_revenue_summary`
-- [ ] `DashboardHandler GET /streamers/:id/revenue` — reads summary table
-- [ ] `DashboardHandler GET /streamers/:id/transactions` — paginated ledger query
+### Phase 5 — Revenue Dashboard ✅
+- [x] Kafka consumer `RevenueAggregator` — one reader per topic, UPSERT into `streamer_revenue_summary`
+- [x] `GET /api/v1/streamers/:id/revenue` — reads pre-aggregated summary
+- [x] `GET /api/v1/streamers/:id/transactions?limit=&before=` — cursor-based paginated ledger
 
 ### Phase 6 — HTTP API Surface
 

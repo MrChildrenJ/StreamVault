@@ -12,9 +12,11 @@ import (
 
 	"github.com/MrChildrenJ/streamvault/internal/bits"
 	"github.com/MrChildrenJ/streamvault/internal/config"
+	"github.com/MrChildrenJ/streamvault/internal/dashboard"
 	"github.com/MrChildrenJ/streamvault/internal/db"
 	"github.com/MrChildrenJ/streamvault/internal/donation"
 	"github.com/MrChildrenJ/streamvault/internal/event"
+	"github.com/MrChildrenJ/streamvault/internal/event/consumer"
 	"github.com/MrChildrenJ/streamvault/internal/subscription"
 	"github.com/MrChildrenJ/streamvault/internal/transaction"
 	"github.com/MrChildrenJ/streamvault/internal/wallet"
@@ -65,6 +67,13 @@ func main() {
 	donationSvc := donation.NewService(pool, walletRepo, txRepo, producer)
 	donationH   := donation.NewHandler(donationSvc)
 
+	dashRepo := dashboard.NewRepository(pool)
+	dashH    := dashboard.NewHandler(dashRepo)
+
+	aggregator := consumer.NewRevenueAggregator(pool, cfg.KafkaBroker)
+	aggregator.Start(ctx)
+	defer aggregator.Close()
+
 	// Router
 	r := gin.Default()
 	r.GET("/healthz", func(c *gin.Context) {
@@ -80,6 +89,7 @@ func main() {
 	bitsH.RegisterRoutes(api)
 	subH.RegisterRoutes(api)
 	donationH.RegisterRoutes(api)
+	dashH.RegisterRoutes(api)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.ServerPort,
