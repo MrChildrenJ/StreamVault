@@ -76,19 +76,20 @@ Repository Layer                 (revenue aggregation,
 - [x] HTTP handlers: `GET /api/v1/users/:id/wallet`, `POST /api/v1/wallets/topup`
 - [ ] Unit tests with real Postgres (testcontainers)
 
-### Phase 3 — Virtual Currency (Bits)
-- [ ] `VirtualCurrencyRepository`: same optimistic lock pattern as wallet
-- [ ] `BitsService.Purchase(userID, bits, idempotencyKey)` — debit wallet, credit bits
-- [ ] `BitsService.Cheer(userID, streamerID, bits, idempotencyKey)` — debit bits, record transaction, update revenue summary
-- [ ] Publish `bits.cheered` event to Kafka
+### Phase 3 — Virtual Currency (Bits) ✅
+- [x] `VirtualCurrencyRepository`: same optimistic lock pattern as wallet
+- [x] `BitsService.Purchase` — optimistic-lock retry on wallet debit, credit bits, insert tx
+- [x] `BitsService.Cheer` — optimistic-lock retry on bits debit, insert tx
+- [x] Kafka producer: publish `bits.purchased` / `bits.cheered` after DB commit (best-effort)
+- [x] `withTx` moved to `internal/db` package (shared)
 
-### Phase 4 — Subscriptions & Donations
-- [ ] `SubscriptionService.Subscribe(subscriberID, streamerID, tierID, idempotencyKey)`
-  - Debit wallet → insert transaction → insert subscription row (within single DB tx)
-- [ ] `SubscriptionService.GiftSubscription(gifterID, recipientID, streamerID, tierID, idempotencyKey)`
-- [ ] `DonationService.Donate(fromUserID, streamerID, amount, message, idempotencyKey)`
-- [ ] Publish `subscription.created`, `donation.received` events to Kafka
-- [ ] Background worker: expire subscriptions where `expires_at < NOW()`
+### Phase 4 — Subscriptions & Donations ✅
+- [x] `SubscriptionService.Subscribe` — optimistic-lock retry, debit wallet + insert tx + insert sub (single DB tx)
+- [x] `SubscriptionService.GiftSubscription` — same flow, gifterID pays, recipientID gets sub
+- [x] `DonationService.Donate` — optimistic-lock retry, debit wallet + insert tx
+- [x] Publish `subscription.created`, `donation.received` to Kafka after commit
+- [x] Background expiry worker (`StartExpiryWorker`) — tickers every 5 min, updates expired subs
+- [x] `transaction.Create` upgraded to `RETURNING id` so callers get the generated ID
 
 ### Phase 5 — Revenue Dashboard
 - [ ] Kafka consumer: `revenue-aggregator` service

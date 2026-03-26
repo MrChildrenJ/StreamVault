@@ -7,23 +7,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/MrChildrenJ/streamvault/internal/db"
 	"github.com/MrChildrenJ/streamvault/internal/transaction"
 )
 
 const maxDebitRetries = 3
-
-// withTx runs fn inside a database transaction, committing on success and rolling back on error.
-func withTx(ctx context.Context, db *pgxpool.Pool, fn func(pgx.Tx) error) error {
-	tx, err := db.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck — rollback error is irrelevant after a real error
-	if err := fn(tx); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
 
 type Service struct {
 	db      *pgxpool.Pool
@@ -38,7 +26,7 @@ func NewService(db *pgxpool.Pool, wallets *Repository, txs *transaction.Reposito
 // TopUp credits the user's wallet and records the transaction atomically.
 // Idempotent: repeated calls with the same idempotencyKey are safe.
 func (s *Service) TopUp(ctx context.Context, userID string, amount int64, idempotencyKey string) error {
-	return withTx(ctx, s.db, func(tx pgx.Tx) error {
+	return db.WithTx(ctx, s.db, func(tx pgx.Tx) error {
 		if err := s.wallets.Credit(ctx, tx, userID, amount); err != nil {
 			return fmt.Errorf("TopUp credit: %w", err)
 		}
@@ -80,7 +68,7 @@ func (s *Service) Debit(
 			return ErrInsufficientFunds
 		}
 
-		err = withTx(ctx, s.db, func(tx pgx.Tx) error {
+		err = db.WithTx(ctx, s.db, func(tx pgx.Tx) error {
 			if err := s.wallets.Debit(ctx, tx, userID, amount, w.Version); err != nil {
 				return err
 			}

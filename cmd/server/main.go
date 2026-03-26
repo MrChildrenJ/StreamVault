@@ -4,14 +4,18 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/MrChildrenJ/streamvault/internal/bits"
 	"github.com/MrChildrenJ/streamvault/internal/config"
 	"github.com/MrChildrenJ/streamvault/internal/db"
+	"github.com/MrChildrenJ/streamvault/internal/donation"
+	"github.com/MrChildrenJ/streamvault/internal/event"
+	"github.com/MrChildrenJ/streamvault/internal/subscription"
 	"github.com/MrChildrenJ/streamvault/internal/transaction"
 	"github.com/MrChildrenJ/streamvault/internal/wallet"
 )
@@ -22,7 +26,8 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	// Run DB migrations
 	if err := db.Migrate(cfg.DatabaseURL, cfg.MigrationsPath); err != nil {
@@ -39,10 +44,26 @@ func main() {
 	log.Println("database connected")
 
 	// Wire dependencies
+	producer := event.NewProducer(cfg.KafkaBroker)
+	defer producer.Close()
+
 	txRepo     := transaction.NewRepository(pool)
 	walletRepo := wallet.NewRepository(pool)
-	walletSvc  := wallet.NewService(pool, walletRepo, txRepo)
-	walletH    := wallet.NewHandler(walletSvc)
+
+	walletSvc := wallet.NewService(pool, walletRepo, txRepo)
+	walletH   := wallet.NewHandler(walletSvc)
+
+	bitsRepo := bits.NewRepository(pool)
+	bitsSvc  := bits.NewService(pool, bitsRepo, walletRepo, txRepo, producer)
+	bitsH    := bits.NewHandler(bitsSvc)
+
+	subRepo := subscription.NewRepository(pool)
+	subSvc  := subscription.NewService(pool, subRepo, walletRepo, txRepo, producer)
+	subH    := subscription.NewHandler(subSvc)
+	subSvc.StartExpiryWorker(ctx, 5*time.Minute)
+
+	donationSvc := donation.NewService(pool, walletRepo, txRepo, producer)
+	donationH   := donation.NewHandler(donationSvc)
 
 	// Router
 	r := gin.Default()
@@ -56,13 +77,15 @@ func main() {
 
 	api := r.Group("/api/v1")
 	walletH.RegisterRoutes(api)
+	bitsH.RegisterRoutes(api)
+	subH.RegisterRoutes(api)
+	donationH.RegisterRoutes(api)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.ServerPort,
 		Handler: r,
 	}
 
-	// Graceful shutdown
 	go func() {
 		log.Printf("StreamVault listening on :%s", cfg.ServerPort)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -70,9 +93,7 @@ func main() {
 		}
 	}()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	<-ctx.Done()
 	log.Println("shutting down...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
